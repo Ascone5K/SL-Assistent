@@ -1,6 +1,5 @@
 import streamlit as st
 import json
-import pandas as pd
 import os
 from datetime import datetime
 from openai import OpenAI
@@ -13,18 +12,20 @@ st.set_page_config(page_title="Fehlerlenkung GPT", layout="centered")
 st.markdown(
     '''
     <style>
-        .stChatMessage {padding: 10px; border-radius: 12px;}
-        .stChatMessage.user {background-color: #e0f7fa;}
-        .stChatMessage.assistant {background-color: #f1f8e9;}
+        body {background-color: #f4f6f9;}
+        .stChatMessage {padding: 12px; border-radius: 16px; margin-bottom: 10px;}
+        .stChatMessage.user {background-color: #d1ecf1; color: #004085;}
+        .stChatMessage.assistant {background-color: #e2f0cb; color: #3c763d;}
         .stButton>button {
-            border-radius: 12px;
-            padding: 0.5em 1em;
+            border-radius: 16px;
+            padding: 0.6em 1.2em;
             font-size: 1em;
-            background-color: #90caf9;
-            color: black;
+            background-color: #4a90e2;
+            color: white;
+            border: none;
         }
         .stButton>button:hover {
-            background-color: #64b5f6;
+            background-color: #357ab8;
             color: white;
         }
     </style>
@@ -32,23 +33,7 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-st.title("🤖 Fehlerlenkungsassistent für den Schichtleiter")
-
-# Buttons modern
-col1, col2 = st.columns(2)
-with col1:
-    if st.button("🆕 Neuer Fehler"):
-        for key in ["messages", "antwort_generiert", "user_inputs", "begruesst", "wiederholpruefung"]:
-            if key in st.session_state:
-                del st.session_state[key]
-        st.rerun()
-with col2:
-    if st.button("🔁 Direkt zur Wiederholprüfung"):
-        st.session_state["wiederholpruefung"] = True
-        for key in ["messages", "antwort_generiert", "user_inputs", "begruesst"]:
-            if key in st.session_state:
-                del st.session_state[key]
-        st.rerun()
+st.title("🧠 GPT-gestützter Fehlerlenkungsassistent")
 
 # Fehlerwissen laden
 fehlerwissen_path = "fehlerwissen.json"
@@ -58,61 +43,62 @@ if os.path.exists(fehlerwissen_path):
 else:
     fehlerwissen = {}
 
-# Systemprompt definieren
+# Prompts definieren
 standard_prompt = (
     "Du bist ein praxisnaher, freundlich kommunizierender Assistent für Schichtleiter im Spritzguss. "
-    "Starte jede Konversation mit: 'Hallo, wie kann ich dich unterstützen?' "
-    "Frage dann nacheinander: Name, Maschine, Artikelnummer, Auftragsnummer, "
-    "Prüfmodus (Formulierung: 'Bei welchem Prüfmodus wurde der Fehler festgestellt?'), Fehlerart, Fehlerklasse (1=kritisch, 2=Hauptfehler, 3=Nebenfehler), "
+    "Frage schrittweise: Name, Maschine, Artikelnummer, Auftragsnummer, "
+    "Prüfmodus ('Bei welchem Prüfmodus wurde der Fehler festgestellt?'), Fehlerart, Fehlerklasse (1=kritisch, 2=Hauptfehler, 3=Nebenfehler), "
     "Prüfart (visuell/messend), Kavitätenanzahl. "
     "Wenn Fehlerklasse 1: Maschine sofort stoppen und Schichtleitung informieren. "
     "Wenn nicht kritisch: Schichtleitung informieren, Maschine darf weiterlaufen. "
     "Starte dann die Wiederholprüfung gemäß SP011.2CL02. "
-    "Gib klare, freundliche Anweisungen wie: 'Gut, machen wir eine Wiederholprüfung…'. "
     "Messende Prüfung: 3 Schüsse prüfen – Visuelle Prüfung: 5 Schüsse prüfen. "
     "Grenzwerte: "
     "- Messend: alle Fehlerklassen: 0 Fehler akzeptiert. "
     "- Visuell, kritisch: 0 Fehler akzeptiert. "
     "- Visuell, hauptfehler: <50 Teile = 0 Fehler, ≥50 Teile = max. 3 Fehler. "
     "- Visuell, nebenfehler: <50 Teile = 0 Fehler, ≥50 Teile = max. 7 Fehler. "
-    "Wenn nicht i.O.: Material mit SP011.2FO02 sperren, Rückverfolgbarkeit erwähnen, auch vorherige Paletten prüfen, Instandhaltung informieren. "
-    "Erstelle anschließend automatisch einen Vorschlag für eine kurze E-Mail an BEQ und Abteilungsleitung mit allen relevanten Informationen. "
-    "Wenn i.O.: Fehlerlenkung abschließen. Sprich menschlich, natürlich und reagiere auf Antworten kontextbezogen."
+    "Wenn nicht i.O.: Material mit SP011.2FO02 sperren, Rückverfolgbarkeit erwähnen, vorherige Paletten prüfen, Instandhaltung informieren. "
+    "Schlage danach eine E-Mail an BEQ und Abteilungsleitung vor. "
+    "Wenn i.O.: Fehlerlenkung abschließen. Antworte immer menschlich, freundlich und schrittweise."
 )
 
 wiederhol_prompt = (
-    "Starte direkt mit einer Wiederholprüfung nach SP011.2CL02. "
-    "Frage nur: Fehlerklasse (1,2,3), Prüfart (visuell oder messend), Kavitätenanzahl. "
-    "Gib konkrete Prüfanweisung: "
-    "- messend: 3 Schüsse prüfen – visuell: 5 Schüsse prüfen. "
-    "Wende Grenzwerte an und beurteile: i.O. oder nicht i.O. "
-    "Wenn nicht i.O.: Erstelle automatisch eine kurze E-Mail-Vorlage für BEQ und Abteilungsleitung. "
-    "Sprich klar, freundlich und hilf dem Schichtleiter Schritt für Schritt."
+    "Du bist ein praxisnaher Assistent. Starte mit 'Legen wir direkt mit der Wiederholprüfung los.' "
+    "Frage nur: Fehlerklasse (1/2/3), Prüfart (visuell oder messend), Kavitätenanzahl. "
+    "Messend = 3 Schüsse, visuell = 5 Schüsse. "
+    "Wende SP011.2CL02-Grenzwerte an. "
+    "Wenn nicht i.O.: Material sperren, Rückverfolgung, E-Mail-Vorschlag an BEQ/AL. "
+    "Wenn i.O.: abschließen. Bleib freundlich und klar."
 )
 
-# Initialisieren + Begrüßung
-if "messages" not in st.session_state:
-    st.session_state.messages = [
-        {"role": "system", "content": wiederhol_prompt if st.session_state.get("wiederholpruefung") else standard_prompt}
-    ]
-    if "begruesst" not in st.session_state:
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=st.session_state.messages,
-            temperature=0.3
-        )
-        begruessung = response.choices[0].message.content
-        st.session_state.messages.append({"role": "assistant", "content": begruessung})
-        st.session_state.begruesst = True
-        with st.chat_message("assistant"):
-            st.markdown(begruessung)
+# Buttons
+col1, col2 = st.columns(2)
+with col1:
+    if st.button("🆕 Neuer Fehler"):
+        for key in ["messages", "wiederholpruefung"]:
+            if key in st.session_state:
+                del st.session_state[key]
+        st.rerun()
+with col2:
+    if st.button("🔁 Direkt zur Wiederholprüfung"):
+        for key in ["messages", "wiederholpruefung"]:
+            if key in st.session_state:
+                del st.session_state[key]
+        st.session_state.wiederholpruefung = True
+        st.rerun()
 
-# Chatverlauf anzeigen
+# Initialisieren
+if "messages" not in st.session_state:
+    prompt = wiederhol_prompt if st.session_state.get("wiederholpruefung") else standard_prompt
+    st.session_state.messages = [{"role": "system", "content": prompt}]
+
+# Chatverlauf
 for msg in st.session_state.messages[1:]:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-# Nutzereingabe
+# Eingabe
 if prompt := st.chat_input("Antwort eingeben..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
