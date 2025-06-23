@@ -9,7 +9,7 @@ client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 # Seite konfigurieren
 st.set_page_config(page_title="Fehlerlenkungs-GPT", layout="centered", page_icon="🧠")
 
-# Custom CSS für modernes UI
+# Modernes UI per CSS
 st.markdown('''
     <style>
         body {
@@ -51,9 +51,6 @@ st.markdown('''
 st.title("🧠 Fehlerlenkungs-GPT Assistent")
 st.caption("Ein Assistent für Schichtleiter zur strukturierten Fehleranalyse und Wiederholprüfung")
 
-# Tabs für Navigation
-tab1, tab2 = st.tabs(["🔍 Neuer Fehler", "♻️ Wiederholprüfung"])
-
 # Fehlerwissen laden oder initialisieren
 fehlerwissen_path = "fehlerwissen.json"
 if os.path.exists(fehlerwissen_path):
@@ -62,7 +59,7 @@ if os.path.exists(fehlerwissen_path):
 else:
     fehlerwissen = {}
 
-# Prompts
+# Prompts definieren
 standard_prompt = (
     "Du bist ein praxisnaher, freundlich kommunizierender Assistent für Schichtleiter im Spritzguss. "
     "Frage schrittweise: Name, Maschine, Artikelnummer, Auftragsnummer, Prüfmodus, Fehlerart, Fehlerklasse (1=kritisch, 2=Hauptfehler, 3=Nebenfehler), "
@@ -90,6 +87,10 @@ wiederhol_prompt = (
     "Wenn i.O.: abschließen. Bleib freundlich und klar."
 )
 
+# Aktiven Tab merken
+if "active_tab" not in st.session_state:
+    st.session_state["active_tab"] = "standard"
+
 # Chatfunktion
 def chat_interface(prompt, start_key="standard"):
     if st.session_state.get("force_reset"):
@@ -103,7 +104,12 @@ def chat_interface(prompt, start_key="standard"):
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-    if user_input := st.chat_input("Antwort eingeben..."):
+    if st.session_state["active_tab"] == start_key:
+        user_input = st.chat_input("Antwort eingeben...")
+    else:
+        user_input = None
+
+    if user_input:
         st.session_state[f"messages_{start_key}"].append({"role": "user", "content": user_input})
         with st.chat_message("user"):
             st.markdown(user_input)
@@ -130,8 +136,12 @@ def chat_interface(prompt, start_key="standard"):
         with open(fehlerwissen_path, "w", encoding="utf-8") as f:
             json.dump(fehlerwissen, f, ensure_ascii=False, indent=2)
 
-# Tab 1: Neuer Fehler
+# Tabs definieren
+tab1, tab2 = st.tabs(["🔍 Neuer Fehler", "♻️ Wiederholprüfung"])
+
+# Tab 1 – Neuer Fehler
 with tab1:
+    st.session_state["active_tab"] = "standard"
     st.info("Starte einen neuen Fehlerlenkungsdialog.")
     if st.button("🔄 Alles zurücksetzen"):
         st.session_state.pop("messages_standard", None)
@@ -139,8 +149,9 @@ with tab1:
         st.success("Dialog wurde zurückgesetzt. Bitte Eingabe starten.")
     chat_interface(standard_prompt, start_key="standard")
 
-# Tab 2: Wiederholprüfung
+# Tab 2 – Wiederholprüfung
 with tab2:
+    st.session_state["active_tab"] = "wiederhol"
     st.warning("Starte direkt mit der Wiederholprüfung.")
     if st.button("🔄 Wiederholprüfung zurücksetzen"):
         st.session_state.pop("messages_wiederhol", None)
