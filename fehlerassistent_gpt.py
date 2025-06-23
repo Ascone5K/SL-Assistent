@@ -5,20 +5,28 @@ import os
 from datetime import datetime
 from openai import OpenAI
 
-# OpenAI API
-api_key = st.secrets.get("OPENAI_API_KEY")
-client = OpenAI(api_key=api_key)
+# OpenAI Client
+client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
-# Layout
+# Seite einrichten
 st.set_page_config(page_title="Fehlerlenkung GPT", layout="centered")
-st.title("🤖 Fehlerlenkungsassistent")
+st.title("🤖 Fehlerlenkungsassistent für den Schichtleiter")
 
-# Button: Neuer Fehler
-if st.button("🆕 Neuer Fehler"):
-    for key in ["messages", "antwort_generiert", "user_inputs", "begruesst"]:
-        if key in st.session_state:
-            del st.session_state[key]
-    st.rerun()
+# Buttons
+col1, col2 = st.columns(2)
+with col1:
+    if st.button("🆕 Neuer Fehler"):
+        for key in ["messages", "antwort_generiert", "user_inputs", "begruesst", "wiederholpruefung"]:
+            if key in st.session_state:
+                del st.session_state[key]
+        st.rerun()
+with col2:
+    if st.button("🔁 Direkt zur Wiederholprüfung"):
+        st.session_state["wiederholpruefung"] = True
+        for key in ["messages", "antwort_generiert", "user_inputs", "begruesst"]:
+            if key in st.session_state:
+                del st.session_state[key]
+        st.rerun()
 
 # Fehlerwissen laden
 fehlerwissen_path = "fehlerwissen.json"
@@ -28,33 +36,50 @@ if os.path.exists(fehlerwissen_path):
 else:
     fehlerwissen = {}
 
-# Verlauf
+# Systemprompt definieren
+standard_prompt = (
+    "Du bist ein natürlich sprechender, hilfsbereiter Assistent für Schichtleiter im Spritzguss. "
+    "Beginne das Gespräch mit einer freundlichen Begrüßung. "
+    "Frage nacheinander folgende Informationen ab: Name, Maschine, Artikelnummer, Auftragsnummer, "
+    "Prüfmodus ('Bei welchem Prüfmodus wurde der Fehler festgestellt?'), Fehlerart, Fehlerklasse (1=kritisch, 2=Hauptfehler, 3=Nebenfehler), "
+    "Prüfart (visuell/messend), Kavitätenanzahl. "
+    "Wenn Fehlerklasse 1: Maschine sofort stoppen und Schichtleitung informieren. "
+    "Wenn nicht kritisch: Schichtleitung informieren, Maschine läuft weiter. "
+    "Führe danach die Wiederholprüfung gemäß SP011.2CL02 durch. "
+    "Sag z. B.: 'Gut, machen wir eine Wiederholprüfung um sicherzustellen, ob der Fehler systematisch ist.' "
+    "Leite den Prüfer durch: 'Bitte entnimm 3 aufeinanderfolgende Schüsse mit jeweils X Kavitäten...' "
+    "Bewerte anhand der Grenzwerte: bei >7 Fehlern ist die Wiederholprüfung nicht i.O. "
+    "Wenn nicht i.O.: Material mit SP011.2FO02 sperren, Rückverfolgbarkeit sicherstellen, vorherige Paletten prüfen, Instandhaltung informieren. "
+    "Wenn i.O.: Fehlerlenkung abschließen. "
+    "Sei klar, praxisnah und freundlich. Gib nie mehrere Fragen auf einmal aus. "
+    "Schlage bei Bedarf eine Mail an BEQ und Abteilungsleitung vor."
+)
+
+wiederhol_prompt = (
+    "Starte direkt eine Wiederholprüfung gemäß SP011.2CL02. "
+    "Frage nur die notwendigen Informationen ab: Fehlerklasse, Prüfart (visuell/messend), Kavitätenanzahl. "
+    "Erkläre den Ablauf praxisnah und sprich natürlich. "
+    "Ziel: Prüfen, ob Fehler systematisch ist, und dem Schichtleiter klare Handlungsempfehlungen geben."
+)
+
+# Initialisierung
 if "messages" not in st.session_state:
     st.session_state.messages = [
-        {"role": "system", "content": (
-            "Du bist ein interaktiver Assistent für Fehlerlenkung im Spritzgussprozess. "
-            "Stelle Schritt für Schritt die relevanten Fragen: Name, Maschine, Artikelnummer, Auftragsnummer, Prüfmodus, "
-            "Fehlerart, Klassifikation, Prüfart, Kavitätenanzahl. "
-            "Führe danach durch die Entscheidung 'kritischer Fehler?' und leite, falls nötig, die Wiederholprüfung nach "
-            "SP011.2CL02 ein. Erläutere dem Schichtleiter wie viele Schüsse geprüft werden müssen, ab wann negativ, "
-            "und leite anschließend passende Sofortmaßnahmen ein. Wenn BEQ informiert werden muss, erstelle eine kurze "
-            "E-Mail-Zusammenfassung. Sprich klar, freundlich, natürlich und frage bei Unklarheiten nach. "
-            "Lerne bei Bedarf Fehlerarten und Prüfarten hinzu."
-        )}
+        {"role": "system", "content": wiederhol_prompt if st.session_state.get("wiederholpruefung") else standard_prompt}
     ]
 
-# Bisherige Nachrichten anzeigen
+# Nachrichten anzeigen
 for msg in st.session_state.messages[1:]:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-# Eingabe und Verarbeitung
+# Eingabe
 if prompt := st.chat_input("Antwort eingeben..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # GPT-Antwort
+    # GPT-Antwort abrufen
     response = client.chat.completions.create(
         model="gpt-4o",
         messages=st.session_state.messages,
@@ -65,33 +90,14 @@ if prompt := st.chat_input("Antwort eingeben..."):
     with st.chat_message("assistant"):
         st.markdown(reply)
 
-    # Automatisches Lernen von Fehlerarten
+    # Fehlerwissen aktualisieren
     for line in reply.splitlines():
         if "Fehlerart:" in line and "Prüfart:" in reply:
             art = line.split("Fehlerart:")[-1].strip()
             if art not in fehlerwissen:
-                if "visuelle" in reply.lower():
+                if "visuell" in reply.lower():
                     fehlerwissen[art] = "visuell"
-                elif "messende" in reply.lower():
+                elif "messend" in reply.lower():
                     fehlerwissen[art] = "messend"
     with open(fehlerwissen_path, "w", encoding="utf-8") as f:
         json.dump(fehlerwissen, f, ensure_ascii=False, indent=2)
-
-    # CSV speichern nach abgeschlossener Erfassung
-    if "antwort_generiert" not in st.session_state and "kavitätenanzahl" in prompt.lower():
-        daten = {}
-        for m in st.session_state.messages:
-            if m["role"] == "user":
-                daten["Eingabe"] = m["content"]
-            elif m["role"] == "assistant" and "Zusammenfassung" in m["content"]:
-                daten["GPT-Zusammenfassung"] = m["content"]
-
-        daten["Zeitstempel"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        df_neu = pd.DataFrame([daten])
-        csv_path = "fehlerfaelle.csv"
-        if os.path.exists(csv_path):
-            df_alt = pd.read_csv(csv_path)
-            df_kombi = pd.concat([df_alt, df_neu], ignore_index=True)
-        else:
-            df_kombi = df_neu
-        df_kombi.to_csv(csv_path, index=False)
