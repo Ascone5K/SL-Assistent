@@ -1,64 +1,41 @@
 import streamlit as st
 import json
 import os
+from datetime import datetime
 from openai import OpenAI
 
-# OpenAI initialisieren
+# OpenAI Client
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
-# Streamlit konfigurieren
-st.set_page_config(page_title="Assistent Fehlerlenkung", layout="centered", page_icon="🛠️")
-
-# Modernes CSS
-st.markdown('''
+# Seite gestalten
+st.set_page_config(page_title="Fehlerlenkung GPT", layout="centered")
+st.markdown(
+    '''
     <style>
-        body {
-            background-color: #f2f4f8;
-            font-family: 'Segoe UI', sans-serif;
-        }
-        .stChatMessage {
-            padding: 16px;
-            border-radius: 18px;
-            margin-bottom: 12px;
-            box-shadow: 0 3px 12px rgba(0, 0, 0, 0.04);
-            max-width: 80%;
-        }
-        .stChatMessage.user {
-            background-color: #e3f2fd;
-            color: #0d47a1;
-            margin-left: auto;
-        }
-        .stChatMessage.assistant {
-            background-color: #e8f5e9;
-            color: #1b5e20;
-            margin-right: auto;
-        }
+        body {background-color: #f4f6f9;}
+        .stChatMessage {padding: 12px; border-radius: 16px; margin-bottom: 10px;}
+        .stChatMessage.user {background-color: #d1ecf1; color: #004085;}
+        .stChatMessage.assistant {background-color: #e2f0cb; color: #3c763d;}
         .stButton>button {
-            border-radius: 6px;
-            padding: 10px 24px;
-            font-size: 1rem;
-            background-color: #1976d2;
+            border-radius: 16px;
+            padding: 0.6em 1.2em;
+            font-size: 1em;
+            background-color: #4a90e2;
             color: white;
-            font-weight: bold;
             border: none;
         }
         .stButton>button:hover {
-            background-color: #125ea5;
-        }
-        .block {
-            padding: 1rem 0;
-            margin-bottom: 2rem;
-            border-bottom: 1px solid #e0e0e0;
+            background-color: #357ab8;
+            color: white;
         }
     </style>
-''', unsafe_allow_html=True)
+    ''',
+    unsafe_allow_html=True
+)
 
-# Titel
-st.title("🛠️ Assistent Fehlerlenkung")
-st.markdown("### GPT-gestützter Helfer für strukturierte Fehleranalysen & Wiederholprüfungen")
-st.markdown("---")
+st.title("🧠 GPT-gestützter Fehlerlenkungsassistent")
 
-# Fehlerwissen im Hintergrund laden
+# Fehlerwissen laden
 fehlerwissen_path = "fehlerwissen.json"
 if os.path.exists(fehlerwissen_path):
     with open(fehlerwissen_path, "r", encoding="utf-8") as f:
@@ -66,10 +43,11 @@ if os.path.exists(fehlerwissen_path):
 else:
     fehlerwissen = {}
 
-# Prompts
+# Prompts definieren
 standard_prompt = (
     "Du bist ein praxisnaher, freundlich kommunizierender Assistent für Schichtleiter im Spritzguss. "
-    "Frage schrittweise: Name, Maschine, Artikelnummer, Auftragsnummer, Prüfmodus, Fehlerart, Fehlerklasse (1=kritisch, 2=Hauptfehler, 3=Nebenfehler), "
+    "Frage schrittweise: Name, Maschine, Artikelnummer, Auftragsnummer, "
+    "Prüfmodus ('Bei welchem Prüfmodus wurde der Fehler festgestellt?'), Fehlerart, Fehlerklasse (1=kritisch, 2=Hauptfehler, 3=Nebenfehler), "
     "Prüfart (visuell/messend), Kavitätenanzahl. "
     "Wenn Fehlerklasse 1: Maschine sofort stoppen und Schichtleitung informieren. "
     "Wenn nicht kritisch: Schichtleitung informieren, Maschine darf weiterlaufen. "
@@ -94,32 +72,48 @@ wiederhol_prompt = (
     "Wenn i.O.: abschließen. Bleib freundlich und klar."
 )
 
-# Hilfsfunktionen
-def render_chat(messages):
-    for msg in messages[1:]:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
+# Buttons
+col1, col2 = st.columns(2)
+with col1:
+    if st.button("🆕 Neuer Fehler"):
+        for key in ["messages", "wiederholpruefung"]:
+            if key in st.session_state:
+                del st.session_state[key]
+        st.rerun()
+with col2:
+    if st.button("🔁 Direkt zur Wiederholprüfung"):
+        for key in ["messages", "wiederholpruefung"]:
+            if key in st.session_state:
+                del st.session_state[key]
+        st.session_state.wiederholpruefung = True
+        st.rerun()
 
-def process_user_input(tab_key, user_input):
-    session_key = f"messages_{tab_key}"
-    messages = st.session_state.get(session_key, [])
-    messages.append({"role": "user", "content": user_input})
+# Initialisieren
+if "messages" not in st.session_state:
+    prompt = wiederhol_prompt if st.session_state.get("wiederholpruefung") else standard_prompt
+    st.session_state.messages = [{"role": "system", "content": prompt}]
+
+# Chatverlauf
+for msg in st.session_state.messages[1:]:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
+
+# Eingabe
+if prompt := st.chat_input("Antwort eingeben..."):
+    st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
-        st.markdown(user_input)
+        st.markdown(prompt)
 
     response = client.chat.completions.create(
         model="gpt-4o",
-        messages=messages,
+        messages=st.session_state.messages,
         temperature=0.3
     )
     reply = response.choices[0].message.content
-    messages.append({"role": "assistant", "content": reply})
-    st.session_state[session_key] = messages
-
+    st.session_state.messages.append({"role": "assistant", "content": reply})
     with st.chat_message("assistant"):
         st.markdown(reply)
 
-    # Fehlerwissen im Hintergrund pflegen
     for line in reply.splitlines():
         if "Fehlerart:" in line and "Prüfart:" in reply:
             art = line.split("Fehlerart:")[-1].strip()
@@ -130,37 +124,3 @@ def process_user_input(tab_key, user_input):
                     fehlerwissen[art] = "messend"
     with open(fehlerwissen_path, "w", encoding="utf-8") as f:
         json.dump(fehlerwissen, f, ensure_ascii=False, indent=2)
-
-# Tabs
-tab1, tab2 = st.tabs(["🔍 Neuer Fehler", "♻️ Wiederholprüfung"])
-
-if "active_tab" not in st.session_state:
-    st.session_state["active_tab"] = "standard"
-
-with tab1:
-    st.session_state["active_tab"] = "standard"
-    st.markdown("#### Neuer Fehlerlenkungsdialog")
-    key = "messages_standard"
-    if key not in st.session_state:
-        st.session_state[key] = [{"role": "system", "content": standard_prompt}]
-    if st.button("🔄 Zurücksetzen Fehler-Dialog"):
-        st.session_state[key] = [{"role": "system", "content": standard_prompt}]
-        st.success("Fehlerdialog zurückgesetzt.")
-    render_chat(st.session_state[key])
-
-with tab2:
-    st.session_state["active_tab"] = "wiederhol"
-    st.markdown("#### Wiederholprüfung starten")
-    key = "messages_wiederhol"
-    if key not in st.session_state:
-        st.session_state[key] = [{"role": "system", "content": wiederhol_prompt}]
-    if st.button("🔄 Zurücksetzen Wiederholprüfung"):
-        st.session_state[key] = [{"role": "system", "content": wiederhol_prompt}]
-        st.success("Wiederholprüfung zurückgesetzt.")
-    render_chat(st.session_state[key])
-
-# Zentrale Chat-Eingabe
-user_input = st.chat_input("Antwort eingeben...")
-if user_input:
-    active = st.session_state.get("active_tab", "standard")
-    process_user_input(active, user_input)
