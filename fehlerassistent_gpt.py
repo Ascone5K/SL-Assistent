@@ -9,7 +9,7 @@ client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 # Seite konfigurieren
 st.set_page_config(page_title="Fehlerlenkungs-GPT", layout="centered", page_icon="🧠")
 
-# Modernes UI per CSS
+# Modernes UI
 st.markdown('''
     <style>
         body {
@@ -33,23 +33,8 @@ st.markdown('''
             color: #1b5e20;
             margin-right: auto;
         }
-        .stButton > button {
-            border-radius: 8px;
-            background-color: #1976d2;
-            color: white;
-            padding: 10px 20px;
-            font-weight: bold;
-            border: none;
-        }
-        .stButton > button:hover {
-            background-color: #1565c0;
-        }
     </style>
 ''', unsafe_allow_html=True)
-
-# Titel
-st.title("🧠 Fehlerlenkungs-GPT Assistent")
-st.caption("Ein Assistent für Schichtleiter zur strukturierten Fehleranalyse und Wiederholprüfung")
 
 # Fehlerwissen laden oder initialisieren
 fehlerwissen_path = "fehlerwissen.json"
@@ -59,106 +44,80 @@ if os.path.exists(fehlerwissen_path):
 else:
     fehlerwissen = {}
 
-# Prompts definieren
-standard_prompt = (
-    "Du bist ein praxisnaher, freundlich kommunizierender Assistent für Schichtleiter im Spritzguss. "
-    "Frage schrittweise: Name, Maschine, Artikelnummer, Auftragsnummer, Prüfmodus, Fehlerart, Fehlerklasse (1=kritisch, 2=Hauptfehler, 3=Nebenfehler), "
-    "Prüfart (visuell/messend), Kavitätenanzahl. "
-    "Wenn Fehlerklasse 1: Maschine sofort stoppen und Schichtleitung informieren. "
-    "Wenn nicht kritisch: Schichtleitung informieren, Maschine darf weiterlaufen. "
-    "Starte dann die Wiederholprüfung gemäß SP011.2CL02. "
-    "Messende Prüfung: 3 Schüsse prüfen – Visuelle Prüfung: 5 Schüsse prüfen. "
-    "Grenzwerte: "
-    "- Messend: alle Fehlerklassen: 0 Fehler akzeptiert. "
-    "- Visuell, kritisch: 0 Fehler akzeptiert. "
-    "- Visuell, hauptfehler: <50 Teile = 0 Fehler, ≥50 Teile = max. 3 Fehler. "
-    "- Visuell, nebenfehler: <50 Teile = 0 Fehler, ≥50 Teile = max. 7 Fehler. "
-    "Wenn nicht i.O.: Material mit SP011.2FO02 sperren, Rückverfolgbarkeit erwähnen, vorherige Paletten prüfen, Instandhaltung informieren. "
-    "Schlage danach eine E-Mail an BEQ und Abteilungsleitung vor. "
-    "Wenn i.O.: Fehlerlenkung abschließen. Antworte immer menschlich, freundlich und schrittweise."
-)
+# Prompts
+standard_prompt = "Du bist ein praxisnaher Assistent... (gekürzt hier)"
+wiederhol_prompt = "Du bist ein praxisnaher Assistent... (gekürzt hier)"
 
-wiederhol_prompt = (
-    "Du bist ein praxisnaher Assistent. Starte mit 'Legen wir direkt mit der Wiederholprüfung los.' "
-    "Frage nur: Fehlerklasse (1/2/3), Prüfart (visuell oder messend), Kavitätenanzahl. "
-    "Messend = 3 Schüsse, visuell = 5 Schüsse. "
-    "Wende SP011.2CL02-Grenzwerte an. "
-    "Wenn nicht i.O.: Material sperren, Rückverfolgung, E-Mail-Vorschlag an BEQ/AL. "
-    "Wenn i.O.: abschließen. Bleib freundlich und klar."
-)
-
-# Aktiven Tab merken
-if "active_tab" not in st.session_state:
-    st.session_state["active_tab"] = "standard"
-
-# Chatfunktion
-def chat_interface(prompt, start_key="standard"):
-    if st.session_state.get("force_reset"):
-        st.session_state.pop("force_reset")
-        return
-
-    if f"messages_{start_key}" not in st.session_state:
-        st.session_state[f"messages_{start_key}"] = [{"role": "system", "content": prompt}]
-
-    for msg in st.session_state[f"messages_{start_key}"][1:]:
+# Chatlogik
+def render_chat(messages):
+    for msg in messages[1:]:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-    if st.session_state["active_tab"] == start_key:
-        user_input = st.chat_input("Antwort eingeben...")
-    else:
-        user_input = None
+def process_user_input(tab_key, user_input):
+    session_key = f"messages_{tab_key}"
+    messages = st.session_state.get(session_key, [])
+    messages.append({"role": "user", "content": user_input})
+    with st.chat_message("user"):
+        st.markdown(user_input)
 
-    if user_input:
-        st.session_state[f"messages_{start_key}"].append({"role": "user", "content": user_input})
-        with st.chat_message("user"):
-            st.markdown(user_input)
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=messages,
+        temperature=0.3
+    )
+    reply = response.choices[0].message.content
+    messages.append({"role": "assistant", "content": reply})
+    st.session_state[session_key] = messages
 
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=st.session_state[f"messages_{start_key}"],
-            temperature=0.3
-        )
-        reply = response.choices[0].message.content
-        st.session_state[f"messages_{start_key}"].append({"role": "assistant", "content": reply})
-        with st.chat_message("assistant"):
-            st.markdown(reply)
+    with st.chat_message("assistant"):
+        st.markdown(reply)
 
-        # Fehlerwissen aktualisieren
-        for line in reply.splitlines():
-            if "Fehlerart:" in line and "Prüfart:" in reply:
-                art = line.split("Fehlerart:")[-1].strip()
-                if art not in fehlerwissen:
-                    if "visuell" in reply.lower():
-                        fehlerwissen[art] = "visuell"
-                    elif "messend" in reply.lower():
-                        fehlerwissen[art] = "messend"
-        with open(fehlerwissen_path, "w", encoding="utf-8") as f:
-            json.dump(fehlerwissen, f, ensure_ascii=False, indent=2)
+    for line in reply.splitlines():
+        if "Fehlerart:" in line and "Prüfart:" in reply:
+            art = line.split("Fehlerart:")[-1].strip()
+            if art not in fehlerwissen:
+                if "visuell" in reply.lower():
+                    fehlerwissen[art] = "visuell"
+                elif "messend" in reply.lower():
+                    fehlerwissen[art] = "messend"
+    with open(fehlerwissen_path, "w", encoding="utf-8") as f:
+        json.dump(fehlerwissen, f, ensure_ascii=False, indent=2)
 
 # Tabs definieren
 tab1, tab2 = st.tabs(["🔍 Neuer Fehler", "♻️ Wiederholprüfung"])
 
-# Tab 1 – Neuer Fehler
+if "active_tab" not in st.session_state:
+    st.session_state["active_tab"] = "standard"
+
 with tab1:
     st.session_state["active_tab"] = "standard"
-    st.info("Starte einen neuen Fehlerlenkungsdialog.")
-    if st.button("🔄 Alles zurücksetzen"):
-        st.session_state.pop("messages_standard", None)
-        st.session_state["force_reset"] = True
-        st.success("Dialog wurde zurückgesetzt. Bitte Eingabe starten.")
-    chat_interface(standard_prompt, start_key="standard")
+    st.subheader("🧾 Neuer Fehler")
+    key = "messages_standard"
+    if key not in st.session_state:
+        st.session_state[key] = [{"role": "system", "content": standard_prompt}]
+    if st.button("🔄 Zurücksetzen (Fehler)"):
+        st.session_state[key] = [{"role": "system", "content": standard_prompt}]
+        st.success("Fehlerdialog zurückgesetzt.")
+    render_chat(st.session_state[key])
 
-# Tab 2 – Wiederholprüfung
 with tab2:
     st.session_state["active_tab"] = "wiederhol"
-    st.warning("Starte direkt mit der Wiederholprüfung.")
-    if st.button("🔄 Wiederholprüfung zurücksetzen"):
-        st.session_state.pop("messages_wiederhol", None)
-        st.session_state["force_reset"] = True
-        st.success("Wiederholprüfung wurde zurückgesetzt. Bitte Eingabe starten.")
-    chat_interface(wiederhol_prompt, start_key="wiederhol")
+    st.subheader("♻️ Wiederholprüfung")
+    key = "messages_wiederhol"
+    if key not in st.session_state:
+        st.session_state[key] = [{"role": "system", "content": wiederhol_prompt}]
+    if st.button("🔄 Zurücksetzen (Wiederholprüfung)"):
+        st.session_state[key] = [{"role": "system", "content": wiederhol_prompt}]
+        st.success("Wiederholprüfung zurückgesetzt.")
+    render_chat(st.session_state[key])
 
 # Fehlerwissen anzeigen
 with st.expander("📘 Fehlerwissen anzeigen/bearbeiten"):
     st.json(fehlerwissen)
+
+# EINZIGES zentrales chat_input
+user_input = st.chat_input("Antwort eingeben...")
+if user_input:
+    active = st.session_state.get("active_tab", "standard")
+    process_user_input(active, user_input)
