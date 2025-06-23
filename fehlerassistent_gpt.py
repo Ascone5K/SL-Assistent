@@ -1,77 +1,70 @@
 import streamlit as st
-import pandas as pd
 import json
-from datetime import datetime
 from openai import OpenAI
 
-# API-Key aus Secret laden (Debugausgabe)
+# API-Key laden
 api_key = st.secrets.get("OPENAI_API_KEY")
-st.write("API-KEY geladen:", "✔️" if api_key else "❌ NICHT GEFUNDEN")
-
-# OpenAI Client initialisieren
 client = OpenAI(api_key=api_key)
 
-# Systemverhalten
-system_prompt = """Du bist ein freundlicher, praxisnaher Fehlerlenkungsassistent im Spritzguss. Du führst Schichtleiter Schritt für Schritt durch die Fehlermeldung. Du fragst nach: Name, Maschine, Artikelnummer, Auftragsnummer, Prüfmodus, Fehlerart, Klassifikation, Prüfart, Kavitätenanzahl. Du bewertest Wiederholprüfungen gemäß SP011.2CL02. Du gibst klare Anweisungen und generierst am Ende eine Zusammenfassung + E-Mail-Vorschlag an BEQ. Wenn dir eine Fehlerart nicht bekannt ist, fragst du: 'Ist das eine visuelle oder messende Prüfung?' und merkst dir die Antwort. Sprich natürlich, klar und hilfsbereit.
-"""
-
-# Verlauf initialisieren
-if "messages" not in st.session_state:
-    st.session_state.messages = [{"role": "system", "content": system_prompt}]
-
-# Lernwissen laden
-try:
-    with open("fehlerwissen.json", "r", encoding="utf-8") as f:
-        fehlerwissen = json.load(f)
-except FileNotFoundError:
-    fehlerwissen = {}
-
-# Layout
+# Seitenlayout
 st.set_page_config(page_title="Fehlerlenkung GPT", layout="centered")
 st.title("🤖 GPT-gestützter Fehlerlenkungsassistent")
 
-# Erste automatische Begrüßung beim Start
-if len(st.session_state.messages) == 1:
-    welcome = client.chat.completions.create(
-        model="gpt-4o",
-        messages=st.session_state.messages,
-        temperature=0.3
-    )
-    reply = welcome.choices[0].message.content
-    st.session_state.messages.append({"role": "assistant", "content": reply})
-    with st.chat_message("assistant"):
-        st.markdown(reply)
+# Benutzerinformationen verwalten
+if "user_inputs" not in st.session_state:
+    st.session_state.user_inputs = {}
 
-# Vorherige Nachrichten anzeigen
-for msg in st.session_state.messages[1:]:
-    with st.chat_message(msg["role"]):
-        st.markdown(msg["content"])
+user_inputs = st.session_state.user_inputs
 
-# Eingabe
+# Begrüßung einmalig anzeigen
+if "begruesst" not in st.session_state:
+    st.chat_message("assistant").markdown("Hallo! Ich helfe dir bei der Fehlerlenkung im Spritzguss. Lass uns Schritt für Schritt vorgehen.")
+    st.session_state.begruesst = True
+
+# Fragenkatalog
+fragen = [
+    ("name", "Wie darf ich dich nennen?"),
+    ("maschine", "An welcher Maschine tritt der Fehler auf?"),
+    ("artikelnummer", "Welche Artikelnummer hat das betroffene Teil?"),
+    ("auftragsnummer", "Wie lautet die Auftragsnummer?"),
+    ("pruefmodus", "Welcher Prüfmodus wird verwendet?"),
+    ("fehlerart", "Welche Art von Fehler tritt auf?"),
+    ("klassifikation", "Wie wird der Fehler klassifiziert? (kritisch, hauptfehler, nebenfehler)"),
+    ("pruefart", "Handelt es sich um eine visuelle oder messende Prüfung?"),
+    ("kavitaeten", "Wie viele Kavitäten hat das Werkzeug?")
+]
+
+# Nächste offene Frage finden
+offene_frage = None
+for schluessel, frage in fragen:
+    if schluessel not in user_inputs:
+        offene_frage = (schluessel, frage)
+        break
+
+# Eingabe und Verarbeitung
 if prompt := st.chat_input("Antwort eingeben..."):
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(prompt)
+    if offene_frage:
+        feld, _ = offene_frage
+        user_inputs[feld] = prompt
+        st.chat_message("user").markdown(prompt)
 
-    # GPT antworten lassen
-    response = client.chat.completions.create(
-        model="gpt-4o",
-        messages=st.session_state.messages,
-        temperature=0.3
-    )
-    gpt_reply = response.choices[0].message.content
-    st.session_state.messages.append({"role": "assistant", "content": gpt_reply})
-    with st.chat_message("assistant"):
-        st.markdown(gpt_reply)
-
-    # Fehlerart automatisch klassifizieren
-    for line in gpt_reply.splitlines():
-        if "Fehlerart:" in line:
-            art = line.split("Fehlerart:")[-1].strip()
-            if art not in fehlerwissen:
-                if "visuell" in gpt_reply:
-                    fehlerwissen[art] = "visuell"
-                elif "messend" in gpt_reply:
-                    fehlerwissen[art] = "messend"
-    with open("fehlerwissen.json", "w", encoding="utf-8") as f:
-        json.dump(fehlerwissen, f, ensure_ascii=False, indent=2)
+# Frage anzeigen (sofern noch nicht vollständig)
+if offene_frage:
+    st.chat_message("assistant").markdown(offene_frage[1])
+else:
+    # Wenn alles ausgefüllt, generiere Zusammenfassung mit GPT
+    if "antwort_generiert" not in st.session_state:
+        messages = [
+            {"role": "system", "content": "Fasse die folgenden Informationen für eine Fehleranalyse im Spritzgussprozess freundlich zusammen."},
+            {"role": "user", "content": json.dumps(user_inputs, indent=2)}
+        ]
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=messages,
+            temperature=0.3
+        )
+        antwort = response.choices[0].message.content
+        st.session_state.antwort_generiert = antwort
+        st.chat_message("assistant").markdown(antwort)
+    else:
+        st.chat_message("assistant").markdown(st.session_state.antwort_generiert)
