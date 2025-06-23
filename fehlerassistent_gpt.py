@@ -6,7 +6,7 @@ from datetime import datetime
 import uuid
 import os
 
-st.write("Vorhandene Secrets:", dict(st.secrets))
+
 openai.api_key = st.secrets["OPENAI_API_KEY"]
 
 # Systemverhalten
