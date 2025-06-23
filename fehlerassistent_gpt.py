@@ -1,7 +1,6 @@
 import streamlit as st
 import json
 import os
-from datetime import datetime
 from openai import OpenAI
 
 # OpenAI Client initialisieren
@@ -91,17 +90,19 @@ wiederhol_prompt = (
     "Wenn i.O.: abschließen. Bleib freundlich und klar."
 )
 
-# Funktion zur Chatlogik
+# Chatfunktion
 def chat_interface(prompt, start_key="standard"):
+    if st.session_state.get("force_reset"):
+        st.session_state.pop("force_reset")
+        return
+
     if f"messages_{start_key}" not in st.session_state:
         st.session_state[f"messages_{start_key}"] = [{"role": "system", "content": prompt}]
 
-    # Chatverlauf anzeigen
     for msg in st.session_state[f"messages_{start_key}"][1:]:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-    # Eingabe
     if user_input := st.chat_input("Antwort eingeben..."):
         st.session_state[f"messages_{start_key}"].append({"role": "user", "content": user_input})
         with st.chat_message("user"):
@@ -133,18 +134,18 @@ def chat_interface(prompt, start_key="standard"):
 with tab1:
     st.info("Starte einen neuen Fehlerlenkungsdialog.")
     if st.button("🔄 Alles zurücksetzen"):
-        if "messages_standard" in st.session_state:
-            del st.session_state["messages_standard"]
-        st.experimental_rerun()
+        st.session_state.pop("messages_standard", None)
+        st.session_state["force_reset"] = True
+        st.success("Dialog wurde zurückgesetzt. Bitte Eingabe starten.")
     chat_interface(standard_prompt, start_key="standard")
 
 # Tab 2: Wiederholprüfung
 with tab2:
     st.warning("Starte direkt mit der Wiederholprüfung.")
     if st.button("🔄 Wiederholprüfung zurücksetzen"):
-        if "messages_wiederhol" in st.session_state:
-            del st.session_state["messages_wiederhol"]
-        st.experimental_rerun()
+        st.session_state.pop("messages_wiederhol", None)
+        st.session_state["force_reset"] = True
+        st.success("Wiederholprüfung wurde zurückgesetzt. Bitte Eingabe starten.")
     chat_interface(wiederhol_prompt, start_key="wiederhol")
 
 # Fehlerwissen anzeigen
