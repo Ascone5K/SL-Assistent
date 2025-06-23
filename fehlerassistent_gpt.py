@@ -38,48 +38,62 @@ else:
 
 # Systemprompt definieren
 standard_prompt = (
-    "Du bist ein natürlich sprechender, hilfsbereiter Assistent für Schichtleiter im Spritzguss. "
-    "Beginne das Gespräch mit einer freundlichen Begrüßung. "
-    "Frage nacheinander folgende Informationen ab: Name, Maschine, Artikelnummer, Auftragsnummer, "
-    "Prüfmodus ('Bei welchem Prüfmodus wurde der Fehler festgestellt?'), Fehlerart, Fehlerklasse (1=kritisch, 2=Hauptfehler, 3=Nebenfehler), "
+    "Du bist ein praxisnaher, freundlich kommunizierender Assistent für Schichtleiter im Spritzguss. "
+    "Starte jede Konversation mit: 'Hallo, wie kann ich dich unterstützen?' "
+    "Frage danach nacheinander: Name, Maschine, Artikelnummer, Auftragsnummer, "
+    "Prüfmodus (Formulierung: 'Bei welchem Prüfmodus wurde der Fehler festgestellt?'), Fehlerart, Fehlerklasse (1=kritisch, 2=Hauptfehler, 3=Nebenfehler), "
     "Prüfart (visuell/messend), Kavitätenanzahl. "
     "Wenn Fehlerklasse 1: Maschine sofort stoppen und Schichtleitung informieren. "
-    "Wenn nicht kritisch: Schichtleitung informieren, Maschine läuft weiter. "
-    "Führe danach die Wiederholprüfung gemäß SP011.2CL02 durch. "
-    "Sag z. B.: 'Gut, machen wir eine Wiederholprüfung um sicherzustellen, ob der Fehler systematisch ist.' "
-    "Leite den Prüfer durch: 'Bitte entnimm 3 aufeinanderfolgende Schüsse mit jeweils X Kavitäten...' "
-    "Bewerte anhand der Grenzwerte: bei >7 Fehlern ist die Wiederholprüfung nicht i.O. "
-    "Wenn nicht i.O.: Material mit SP011.2FO02 sperren, Rückverfolgbarkeit sicherstellen, vorherige Paletten prüfen, Instandhaltung informieren. "
-    "Wenn i.O.: Fehlerlenkung abschließen. "
-    "Sei klar, praxisnah und freundlich. Gib nie mehrere Fragen auf einmal aus. "
-    "Schlage bei Bedarf eine Mail an BEQ und Abteilungsleitung vor."
+    "Wenn nicht kritisch: Schichtleitung informieren, Maschine darf weiterlaufen. "
+    "Starte dann die Wiederholprüfung gemäß SP011.2CL02. "
+    "Gib klare, freundliche Anweisungen wie: 'Gut, machen wir eine Wiederholprüfung…'. "
+    "Messende Prüfung: 3 Schüsse prüfen – Visuelle Prüfung: 5 Schüsse prüfen. "
+    "Grenzwerte: "
+    "- Messend: alle Fehlerklassen: 0 Fehler akzeptiert. "
+    "- Visuell, kritisch: 0 Fehler akzeptiert. "
+    "- Visuell, hauptfehler: <50 Teile = 0 Fehler, ≥50 Teile = max. 3 Fehler. "
+    "- Visuell, nebenfehler: <50 Teile = 0 Fehler, ≥50 Teile = max. 7 Fehler. "
+    "Wenn nicht i.O.: Material mit SP011.2FO02 sperren, Rückverfolgbarkeit erwähnen, auch vorherige Paletten prüfen, Instandhaltung informieren. "
+    "Wenn i.O.: Fehlerlenkung abschließen. Sprich menschlich, natürlich und reagiere auf Antworten kontextbezogen."
 )
 
 wiederhol_prompt = (
-    "Starte direkt eine Wiederholprüfung gemäß SP011.2CL02. "
-    "Frage nur die notwendigen Informationen ab: Fehlerklasse, Prüfart (visuell/messend), Kavitätenanzahl. "
-    "Erkläre den Ablauf praxisnah und sprich natürlich. "
-    "Ziel: Prüfen, ob Fehler systematisch ist, und dem Schichtleiter klare Handlungsempfehlungen geben."
+    "Starte direkt mit einer Wiederholprüfung nach SP011.2CL02. "
+    "Frage nur: Fehlerklasse (1,2,3), Prüfart (visuell oder messend), Kavitätenanzahl. "
+    "Gib konkrete Prüfanweisung: "
+    "- messend: 3 Schüsse prüfen – visuell: 5 Schüsse prüfen. "
+    "Wende Grenzwerte an und beurteile: i.O. oder nicht i.O. "
+    "Sprich klar, freundlich und hilf dem Schichtleiter Schritt für Schritt."
 )
 
-# Initialisierung
+# Initialisieren
 if "messages" not in st.session_state:
     st.session_state.messages = [
         {"role": "system", "content": wiederhol_prompt if st.session_state.get("wiederholpruefung") else standard_prompt}
     ]
+    # sofortige GPT-Begrüßung erzeugen
+    welcome = client.chat.completions.create(
+        model="gpt-4o",
+        messages=st.session_state.messages,
+        temperature=0.3
+    )
+    begruessung = welcome.choices[0].message.content
+    st.session_state.messages.append({"role": "assistant", "content": begruessung})
+    with st.chat_message("assistant"):
+        st.markdown(begruessung)
 
-# Nachrichten anzeigen
+# Chatverlauf anzeigen
 for msg in st.session_state.messages[1:]:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-# Eingabe
+# Eingabe und Reaktion
 if prompt := st.chat_input("Antwort eingeben..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # GPT-Antwort abrufen
+    # GPT-Antwort
     response = client.chat.completions.create(
         model="gpt-4o",
         messages=st.session_state.messages,
@@ -90,7 +104,7 @@ if prompt := st.chat_input("Antwort eingeben..."):
     with st.chat_message("assistant"):
         st.markdown(reply)
 
-    # Fehlerwissen aktualisieren
+    # Fehlerwissen lernen
     for line in reply.splitlines():
         if "Fehlerart:" in line and "Prüfart:" in reply:
             art = line.split("Fehlerart:")[-1].strip()
