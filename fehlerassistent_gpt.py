@@ -1,70 +1,97 @@
 import streamlit as st
 import json
+import pandas as pd
+import os
+from datetime import datetime
 from openai import OpenAI
 
-# API-Key laden
+# OpenAI API
 api_key = st.secrets.get("OPENAI_API_KEY")
 client = OpenAI(api_key=api_key)
 
-# Seitenlayout
+# Layout
 st.set_page_config(page_title="Fehlerlenkung GPT", layout="centered")
-st.title("🤖 GPT-gestützter Fehlerlenkungsassistent")
+st.title("🤖 Fehlerlenkungsassistent")
 
-# Benutzerinformationen verwalten
-if "user_inputs" not in st.session_state:
-    st.session_state.user_inputs = {}
+# Button: Neuer Fehler
+if st.button("🆕 Neuer Fehler"):
+    for key in ["messages", "antwort_generiert", "user_inputs", "begruesst"]:
+        if key in st.session_state:
+            del st.session_state[key]
+    st.rerun()
 
-user_inputs = st.session_state.user_inputs
+# Fehlerwissen laden
+fehlerwissen_path = "fehlerwissen.json"
+if os.path.exists(fehlerwissen_path):
+    with open(fehlerwissen_path, "r", encoding="utf-8") as f:
+        fehlerwissen = json.load(f)
+else:
+    fehlerwissen = {}
 
-# Begrüßung einmalig anzeigen
-if "begruesst" not in st.session_state:
-    st.chat_message("assistant").markdown("Hallo! Ich helfe dir bei der Fehlerlenkung im Spritzguss. Lass uns Schritt für Schritt vorgehen.")
-    st.session_state.begruesst = True
+# Verlauf
+if "messages" not in st.session_state:
+    st.session_state.messages = [
+        {"role": "system", "content": (
+            "Du bist ein interaktiver Assistent für Fehlerlenkung im Spritzgussprozess. "
+            "Stelle Schritt für Schritt die relevanten Fragen: Name, Maschine, Artikelnummer, Auftragsnummer, Prüfmodus, "
+            "Fehlerart, Klassifikation, Prüfart, Kavitätenanzahl. "
+            "Führe danach durch die Entscheidung 'kritischer Fehler?' und leite, falls nötig, die Wiederholprüfung nach "
+            "SP011.2CL02 ein. Erläutere dem Schichtleiter wie viele Schüsse geprüft werden müssen, ab wann negativ, "
+            "und leite anschließend passende Sofortmaßnahmen ein. Wenn BEQ informiert werden muss, erstelle eine kurze "
+            "E-Mail-Zusammenfassung. Sprich klar, freundlich, natürlich und frage bei Unklarheiten nach. "
+            "Lerne bei Bedarf Fehlerarten und Prüfarten hinzu."
+        )}
+    ]
 
-# Fragenkatalog
-fragen = [
-    ("name", "Wie darf ich dich nennen?"),
-    ("maschine", "An welcher Maschine tritt der Fehler auf?"),
-    ("artikelnummer", "Welche Artikelnummer hat das betroffene Teil?"),
-    ("auftragsnummer", "Wie lautet die Auftragsnummer?"),
-    ("pruefmodus", "Welcher Prüfmodus wird verwendet?"),
-    ("fehlerart", "Welche Art von Fehler tritt auf?"),
-    ("klassifikation", "Wie wird der Fehler klassifiziert? (kritisch, hauptfehler, nebenfehler)"),
-    ("pruefart", "Handelt es sich um eine visuelle oder messende Prüfung?"),
-    ("kavitaeten", "Wie viele Kavitäten hat das Werkzeug?")
-]
-
-# Nächste offene Frage finden
-offene_frage = None
-for schluessel, frage in fragen:
-    if schluessel not in user_inputs:
-        offene_frage = (schluessel, frage)
-        break
+# Bisherige Nachrichten anzeigen
+for msg in st.session_state.messages[1:]:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
 
 # Eingabe und Verarbeitung
 if prompt := st.chat_input("Antwort eingeben..."):
-    if offene_frage:
-        feld, _ = offene_frage
-        user_inputs[feld] = prompt
-        st.chat_message("user").markdown(prompt)
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    with st.chat_message("user"):
+        st.markdown(prompt)
 
-# Frage anzeigen (sofern noch nicht vollständig)
-if offene_frage:
-    st.chat_message("assistant").markdown(offene_frage[1])
-else:
-    # Wenn alles ausgefüllt, generiere Zusammenfassung mit GPT
-    if "antwort_generiert" not in st.session_state:
-        messages = [
-            {"role": "system", "content": "Fasse die folgenden Informationen für eine Fehleranalyse im Spritzgussprozess freundlich zusammen."},
-            {"role": "user", "content": json.dumps(user_inputs, indent=2)}
-        ]
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=messages,
-            temperature=0.3
-        )
-        antwort = response.choices[0].message.content
-        st.session_state.antwort_generiert = antwort
-        st.chat_message("assistant").markdown(antwort)
-    else:
-        st.chat_message("assistant").markdown(st.session_state.antwort_generiert)
+    # GPT-Antwort
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=st.session_state.messages,
+        temperature=0.3
+    )
+    reply = response.choices[0].message.content
+    st.session_state.messages.append({"role": "assistant", "content": reply})
+    with st.chat_message("assistant"):
+        st.markdown(reply)
+
+    # Automatisches Lernen von Fehlerarten
+    for line in reply.splitlines():
+        if "Fehlerart:" in line and "Prüfart:" in reply:
+            art = line.split("Fehlerart:")[-1].strip()
+            if art not in fehlerwissen:
+                if "visuelle" in reply.lower():
+                    fehlerwissen[art] = "visuell"
+                elif "messende" in reply.lower():
+                    fehlerwissen[art] = "messend"
+    with open(fehlerwissen_path, "w", encoding="utf-8") as f:
+        json.dump(fehlerwissen, f, ensure_ascii=False, indent=2)
+
+    # CSV speichern nach abgeschlossener Erfassung
+    if "antwort_generiert" not in st.session_state and "kavitätenanzahl" in prompt.lower():
+        daten = {}
+        for m in st.session_state.messages:
+            if m["role"] == "user":
+                daten["Eingabe"] = m["content"]
+            elif m["role"] == "assistant" and "Zusammenfassung" in m["content"]:
+                daten["GPT-Zusammenfassung"] = m["content"]
+
+        daten["Zeitstempel"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        df_neu = pd.DataFrame([daten])
+        csv_path = "fehlerfaelle.csv"
+        if os.path.exists(csv_path):
+            df_alt = pd.read_csv(csv_path)
+            df_kombi = pd.concat([df_alt, df_neu], ignore_index=True)
+        else:
+            df_kombi = df_neu
+        df_kombi.to_csv(csv_path, index=False)
