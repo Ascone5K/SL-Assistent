@@ -1,13 +1,11 @@
 import streamlit as st
 import pandas as pd
-import openai
 import json
 from datetime import datetime
-import uuid
-import os
+from openai import OpenAI
 
-
-openai.api_key = st.secrets["OPENAI_API_KEY"]
+# OpenAI Client initialisieren
+client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
 # Systemverhalten
 system_prompt = """Du bist ein freundlicher, praxisnaher Fehlerlenkungsassistent im Spritzguss. Du führst Schichtleiter Schritt für Schritt durch die Fehlermeldung. Du fragst nach: Name, Maschine, Artikelnummer, Auftragsnummer, Prüfmodus, Fehlerart, Klassifikation, Prüfart, Kavitätenanzahl. Du bewertest Wiederholprüfungen gemäß SP011.2CL02. Du gibst klare Anweisungen und generierst am Ende eine Zusammenfassung + E-Mail-Vorschlag an BEQ. Wenn dir eine Fehlerart nicht bekannt ist, fragst du: 'Ist das eine visuelle oder messende Prüfung?' und merkst dir die Antwort. Sprich natürlich, klar und hilfsbereit.
@@ -41,8 +39,8 @@ if prompt := st.chat_input("Antwort eingeben..."):
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # GPT antworten lassen
-    response = openai.ChatCompletion.create(
+    # GPT antworten lassen (OpenAI v1 Syntax)
+    response = client.chat.completions.create(
         model="gpt-4o",
         messages=st.session_state.messages,
         temperature=0.3
